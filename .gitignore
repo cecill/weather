@@ -1,0 +1,5 @@
+secrets.json
+weather.log
+__pycache__/
+*.pyc
+.DS_Store
