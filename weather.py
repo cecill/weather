@@ -37,44 +37,35 @@ def load_secrets():
         return None
 
 
-def fetch_current_weather(api_key, station_id):
-    """Fetch current weather data from TWC API."""
-    url = "https://api.weather.com/v2/pws/observations/current"
-    params = {
-        "stationId": station_id,
-        "format": "json",
-        "units": "e",
-        "apiKey": api_key,
-        "numericPrecision": "decimal"
-    }
-    
+def _fetch(url, params, label):
+    """Make a GET request and return parsed JSON, or None on failure."""
     try:
         response = requests.get(url, params=params, timeout=5)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        logging.error(f"Current weather API request failed: {e}")
+        logging.error(f"{label} API request failed: {e}")
         return None
+
+
+def fetch_current_weather(api_key, station_id):
+    """Fetch current weather data from TWC API."""
+    return _fetch(
+        "https://api.weather.com/v2/pws/observations/current",
+        {"stationId": station_id, "format": "json", "units": "e",
+         "apiKey": api_key, "numericPrecision": "decimal"},
+        "Current weather"
+    )
 
 
 def fetch_7day_history(api_key, station_id):
     """Fetch 7-day history from TWC API."""
-    url = "https://api.weather.com/v2/pws/dailysummary/7day"
-    params = {
-        "stationId": station_id,
-        "format": "json",
-        "units": "e",
-        "apiKey": api_key,
-        "numericPrecision": "decimal"
-    }
-    
-    try:
-        response = requests.get(url, params=params, timeout=5)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        logging.error(f"7-day history API request failed: {e}")
-        return None
+    return _fetch(
+        "https://api.weather.com/v2/pws/dailysummary/7day",
+        {"stationId": station_id, "format": "json", "units": "e",
+         "apiKey": api_key, "numericPrecision": "decimal"},
+        "7-day history"
+    )
 
 
 def fetch_forecast(api_key, lat, lon):
@@ -97,26 +88,51 @@ def fetch_forecast(api_key, lat, lon):
         return None
 
 
+COMPASS_POINTS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+                  "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+
+
+def degrees_to_compass(degrees):
+    """Convert wind direction degrees to a compass bearing string."""
+    if degrees is None:
+        return "N/A"
+    return COMPASS_POINTS[round(degrees / 22.5) % 16]
+
+
 def format_current_weather(data):
     """Format current weather data for display."""
     if not data or "observations" not in data:
         return "No current weather data available"
-    
+
     obs = data["observations"][0] if data["observations"] else {}
     imperial = obs.get("imperial", {})
-    
+
+    obs_time = obs.get("obsTimeLocal", "")
+    if obs_time:
+        try:
+            ts = datetime.strptime(obs_time, "%Y-%m-%d %H:%M:%S")
+            time_str = ts.strftime("%-I:%M %p")
+        except ValueError:
+            time_str = obs_time
+    else:
+        time_str = "N/A"
+
+    winddir = obs.get("winddir")
+    compass = degrees_to_compass(winddir)
+    winddir_str = f"{winddir}° ({compass})" if winddir is not None else "N/A"
+
     lines = [
-        "🌤️  CURRENT CONDITIONS:",
+        f"🌤️  CURRENT CONDITIONS (as of {time_str}):",
         f"   Temperature:    {imperial.get('temp', 'N/A')}°F",
         f"   Feels Like:     {imperial.get('feelsLike', 'N/A')}°F",
         f"   Humidity:       {obs.get('humidity', 'N/A')}%",
         f"   Wind Speed:     {imperial.get('windSpeed', 'N/A')} mph",
         f"   Wind Gust:      {imperial.get('windGust', 'N/A')} mph",
-        f"   Wind Direction: {obs.get('winddir', 'N/A')}°",
+        f"   Wind Direction: {winddir_str}",
         f"   Dew Point:      {imperial.get('dewpt', 'N/A')}°F",
         f"   UV Index:       {obs.get('uv', 'N/A')}",
     ]
-    
+
     return "\n".join(lines)
 
 
@@ -137,11 +153,11 @@ def format_7day_history(data):
         
         temp_high = imperial.get("tempHigh", "N/A")
         temp_low = imperial.get("tempLow", "N/A")
-        precip = imperial.get("precipTotal", 0)
+        precip = imperial.get("precipTotal")
         humidity_avg = day.get("humidityAvg", "N/A")
         wind_avg = imperial.get("windspeedAvg", "N/A")
-        
-        precip_str = f" 🌧️{precip}\"" if precip and precip > 0 else ""
+
+        precip_str = f" 🌧️{precip}\"" if precip is not None and precip > 0 else ""
         lines.append(f"   {date_str}: {temp_low}°-{temp_high}°F | Humidity: {humidity_avg}% | Wind: {wind_avg} mph{precip_str}")
     
     return "\n".join(lines)
@@ -149,20 +165,14 @@ def format_7day_history(data):
 
 def format_forecast(data):
     """Format forecast data for display."""
-    if not data:
-        return ""
-    
     if "dayOfWeek" not in data:
         return ""
-    
+
     days_of_week = data.get("dayOfWeek", [])
     temps_max = data.get("temperatureMax", [])
     temps_min = data.get("temperatureMin", [])
     narratives = data.get("narrative", [])
-    
-    if not days_of_week:
-        return ""
-    
+
     lines = ["", "🔮 5-DAY FORECAST:"]
     
     for i in range(min(5, len(days_of_week))):
